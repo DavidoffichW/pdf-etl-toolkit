@@ -1,4 +1,3 @@
-````markdown
 # pdf-etl-toolkit
 
 A deterministic, workflow-oriented PDF ingestion and ETL utility built as a single Streamlit application.
@@ -78,7 +77,7 @@ pdf-etl-toolkit/
     state.py
     utils.py
     workspace.py
-````
+```
 
 ---
 
