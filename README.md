@@ -5,7 +5,7 @@ A deterministic, workflow-oriented PDF ingestion and ETL utility built as a sing
 This project focuses on **controlled document transformation** rather than freeform editing:
 - ingest PDFs
 - reorder and merge
-- preview reliably (including “heavy” PDFs via image rendering)
+- preview PDFs via image rendering
 - extract tables and export structured outputs (capability-dependent)
 
 The application is designed to **degrade gracefully** depending on which Python libraries are available on a user machine.
