@@ -8,6 +8,7 @@ import state
 
 
 SS_SLICE_CONFIG = "slice_config"
+SS_LAST_DETECT = "last_detect_summary"
 
 
 def _slice_key(doc_id: str, candidate_index: int) -> str:
@@ -42,9 +43,25 @@ def render_detection_panel(engine: Any) -> None:
     st.subheader("Table Detection")
 
     if st.button("Run Detection", use_container_width=True):
-        res = engine.detect_tables(file_id=doc_id, data=blob)
+        ev_before = len(engine.get_events())
+        with st.spinner("Detecting tables..."):
+            res = engine.detect_tables(file_id=doc_id, data=blob)
+            st.write([c.page_index for c in res.candidates])
         st.session_state[state.SS_DETECTIONS][doc_id] = res.candidates
-        st.rerun()
+        ev_after = engine.get_events()[ev_before:]
+        warn_msgs = [e["message"] for e in ev_after if str(e.get("level")) in ("WARN", "ERROR")]
+        if res.candidates:
+            st.success(f"Detected {len(res.candidates)} table(s).")
+        else:
+            st.warning("No tables detected.")
+        for msg in warn_msgs:
+            st.warning(msg)
+        st.session_state[SS_LAST_DETECT] = {
+            "doc_id": doc_id,
+            "status": getattr(res, "status", ""),
+            "count": len(res.candidates),
+            "events": ev_after,
+        }
 
     candidates = st.session_state[state.SS_DETECTIONS].get(doc_id)
     if not candidates:

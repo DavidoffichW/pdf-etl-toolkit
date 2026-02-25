@@ -276,101 +276,101 @@ class Engine:
         return export_mod.build_results_csv_bytes(table)
 
     def export_interactive(
-        self,
-        *,
-        file_id: str,
-        candidates: Sequence[extract.TableCandidate],
-        selected_candidate_indices: Sequence[int],
-        slice_configs: Dict[int, Dict[str, Any]],
-        docs_meta: Sequence[Dict[str, Any]],
-        export_format: str,
-        include_xlsx: bool,
-    ) -> bytes:
-        if not candidates:
-            self._log("WARN", "No candidates available for export.")
-            if export_format == "csv":
-                return b""
-            manifest = self.build_manifest(self.ingested_from_docs_meta(docs_meta))
-            return export_mod.build_export_zip(
-                table_headers=[],
-                table_rows=[],
-                manifest=manifest,
-                events=self.get_events(),
-                include_xlsx=False,
-            )
-
-        indices = [int(i) for i in selected_candidate_indices]
-        indices = [i for i in indices if 0 <= i < len(candidates)]
-        if not indices:
-            self._log("WARN", "No valid candidate indices selected.")
-            if export_format == "csv":
-                return b""
-            manifest = self.build_manifest(self.ingested_from_docs_meta(docs_meta))
-            return export_mod.build_export_zip(
-                table_headers=[],
-                table_rows=[],
-                manifest=manifest,
-                events=self.get_events(),
-                include_xlsx=False,
-            )
-
-        out_headers: Optional[List[str]] = None
-        out_rows: List[Tuple[str, int, str, int, Sequence[str]]] = []
-
-        for idx in indices:
-            cand = candidates[idx]
-            grid = self.candidate_to_grid(cand)
-
-            cfg = slice_configs.get(idx, {})
-            mode = str(cfg.get("mode", "table"))
-            row_1b = cfg.get("row")
-            col_1b = cfg.get("column")
-
-            try:
-                headers, sliced = self.slice_grid(
-                    grid,
-                    mode=mode,
-                    row_1b=(None if row_1b in (None, "") else int(row_1b)),
-                    col_1b=(None if col_1b in (None, "") else int(col_1b)),
+            self,
+            *,
+            file_id: str,
+            candidates: Sequence[extract.TableCandidate],
+            selected_candidate_indices: Sequence[int],
+            slice_configs: Dict[int, Dict[str, Any]],
+            docs_meta: Sequence[Dict[str, Any]],
+            export_format: str,
+            include_xlsx: bool,
+        ) -> bytes:
+            if not candidates:
+                self._log("WARN", "No candidates available for export.")
+                if export_format == "csv":
+                    return b""
+                manifest = self.build_manifest(self.ingested_from_docs_meta(docs_meta))
+                return export_mod.build_export_zip(
+                    table_headers=[],
+                    table_rows=[],
+                    manifest=manifest,
+                    events=self.get_events(),
+                    include_xlsx=False,
                 )
-            except Exception as e:
-                self._log("WARN", f"Slice failed for candidate idx={idx}: {e}")
-                continue
 
-            if out_headers is None:
-                out_headers = list(headers)
-            else:
-                if list(headers) != list(out_headers):
-                    self._log("WARN", f"Schema mismatch for candidate idx={idx}; skipping.")
+            indices = [int(i) for i in selected_candidate_indices]
+            indices = [i for i in indices if 0 <= i < len(candidates)]
+            if not indices:
+                self._log("WARN", "No valid candidate indices selected.")
+                if export_format == "csv":
+                    return b""
+                manifest = self.build_manifest(self.ingested_from_docs_meta(docs_meta))
+                return export_mod.build_export_zip(
+                    table_headers=[],
+                    table_rows=[],
+                    manifest=manifest,
+                    events=self.get_events(),
+                    include_xlsx=False,
+                )
+
+            out_headers: Optional[List[str]] = None
+            out_rows: List[Tuple[str, int, str, int, Sequence[str]]] = []
+
+            for idx in indices:
+                cand = candidates[idx]
+                grid = self.candidate_to_grid(cand)
+
+                cfg = slice_configs.get(idx, {})
+                mode = str(cfg.get("mode", "table"))
+                row_1b = cfg.get("row")
+                col_1b = cfg.get("column")
+
+                try:
+                    headers, sliced = self.slice_grid(
+                        grid,
+                        mode=mode,
+                        row_1b=(None if row_1b in (None, "") else int(row_1b)),
+                        col_1b=(None if col_1b in (None, "") else int(col_1b)),
+                    )
+                except Exception as e:
+                    self._log("WARN", f"Slice failed for candidate idx={idx}: {e}")
                     continue
 
-            for r_i, row_vals in enumerate(sliced):
-                out_rows.append(
-                    (
-                        cand.file_id,
-                        int(cand.page_index),
-                        str(cand.candidate_id),
-                        int(r_i),
-                        list(row_vals),
+                if out_headers is None:
+                    out_headers = list(headers)
+                else:
+                    if list(headers) != list(out_headers):
+                        self._log("WARN", f"Schema mismatch for candidate idx={idx}; skipping.")
+                        continue
+
+                for r_i, row_vals in enumerate(sliced):
+                    out_rows.append(
+                        (
+                            cand.file_id,
+                            int(cand.page_index),
+                            str(cand.candidate_id),
+                            int(r_i),
+                            list(row_vals),
+                        )
                     )
-                )
 
-        if out_headers is None:
-            self._log("WARN", "No rows produced after slicing.")
-            out_headers = []
+            if out_headers is None:
+                self._log("WARN", "No rows produced after slicing.")
+                out_headers = []
 
-        manifest = self.build_manifest(self.ingested_from_docs_meta(docs_meta))
+            manifest = self.build_manifest(self.ingested_from_docs_meta(docs_meta))
 
-        if export_format == "csv":
-            return self._build_csv_bytes(table_headers=out_headers, table_rows=out_rows)
+            if export_format == "csv":
+                return self._build_csv_bytes(table_headers=out_headers, table_rows=out_rows)
 
-        return export_mod.build_export_zip(
-            table_headers=out_headers,
-            table_rows=out_rows,
-            manifest=manifest,
-            events=self.get_events(),
-            include_xlsx=bool(include_xlsx),
-        )
+            return export_mod.build_export_zip(
+                table_headers=out_headers,
+                table_rows=out_rows,
+                manifest=manifest,
+                events=self.get_events(),
+                include_xlsx=bool(include_xlsx),
+            )
     
     def batch_extract_directory(
         self,

@@ -49,7 +49,7 @@ def build_run_plan(capabilities: Optional[Dict[str, Capability]] = None) -> RunP
         reason=None,
     )
 
-    tables_provider = _pick_first_available(tables_cap, ["pymupdf_tables", "pdfplumber"])
+    tables_provider = _pick_first_available(tables_cap, ["pdfplumber", "pymupdf_tables"])
     if tables_provider is None:
         tables_plan = ProviderPlan(
             capability="tables",

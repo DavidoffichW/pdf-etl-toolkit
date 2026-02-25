@@ -46,13 +46,60 @@ The application is designed to **degrade gracefully** depending on which Python 
 
 ---
 
-## Planned / Not Yet Implemented (Roadmap)
+## Table Detection Strategy
 
-These are requirements that are **explicitly planned**, but should be treated as **not implemented** until confirmed in code:
+Detection uses a deterministic provider cascade:
 
-- Internal in-memory rename/ordering (e.g., logical `1.pdf`, `2.pdf`, …) to guarantee extraction order
-- Cross-PDF extraction: same page + same table index + same (row, col) slice across all PDFs → single consolidated CSV output
-- Stronger table selection UX: selecting table index among tables on a page with preview confirmation
+1. `pdfplumber` (preferred when available)
+2. `pymupdf` (`page.find_tables()`)
+3. Deterministic text-grid heuristic fallback
+
+The heuristic fallback:
+
+- Requires ≥ 3 rows
+- Groups words by Y-alignment
+- Infers column anchors
+- Produces export-compatible structured cells
+
+Detection stops once a provider yields at least one candidate.
+
+---
+
+## Export Behavior
+
+### CSV Export
+
+- Exactly one table must be selected
+- Schema is derived from first row
+- Deterministic ordering
+- Inline CSV preview available before download
+
+### JSONL Export
+
+- JSONL preview displayed in UI
+- Deterministic record structure
+- Available inside ZIP export package
+
+### ZIP Export
+
+Contains:
+
+- CSV (if applicable)
+- JSONL manifest
+- Event log
+
+All exports are stateless and deterministic.
+
+---
+
+## UI Improvements
+
+- Working Prev / Next navigation in preview
+- Detection feedback
+- Inline CSV preview
+- Inline JSONL preview
+- Export warnings surfaced to UI
+- Spinner indicators during detection and export
 
 ---
 
