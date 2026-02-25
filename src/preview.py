@@ -92,13 +92,11 @@ def _single_page_image_viewer(
     height_px: int,
     key_suffix: str,
 ) -> None:
-
     if not _has_pymupdf():
         st.warning("Install PyMuPDF for image preview.")
         return
 
     st.markdown(f"### {title}")
-
     pdf_id = _sha16(pdf_bytes)
 
     zoom_key = f"pv_zoom_{key_suffix}"
@@ -112,16 +110,15 @@ def _single_page_image_viewer(
     if page_key not in st.session_state:
         st.session_state[page_key] = 1
 
-
     nav_col1, nav_col2, nav_col3, render_col1, render_col2, render_col3 = st.columns(
         [0.6, 0.6, 1.2, 1.5, 1.5, 0.8]
     )
 
-    def _prev():
-        st.session_state[page_key] = max(1, st.session_state[page_key] - 1)
+    def _prev() -> None:
+        st.session_state[page_key] = max(1, int(st.session_state[page_key]) - 1)
 
-    def _next():
-        st.session_state[page_key] = min(page_count, st.session_state[page_key] + 1)
+    def _next() -> None:
+        st.session_state[page_key] = min(page_count, int(st.session_state[page_key]) + 1)
 
     with nav_col1:
         st.button("◀", key=f"pv_prev_{key_suffix}", on_click=_prev)
@@ -130,36 +127,36 @@ def _single_page_image_viewer(
         st.button("▶", key=f"pv_next_{key_suffix}", on_click=_next)
 
     with nav_col3:
-        st.session_state[page_key] = st.number_input(
+        st.number_input(
             "Page",
             min_value=1,
             max_value=page_count,
-            value=st.session_state[page_key],
+            value=int(st.session_state[page_key]),
             step=1,
             label_visibility="collapsed",
-            key=f"pv_page_input_{key_suffix}",
+            key=page_key,
         )
 
     with render_col1:
-        st.session_state[zoom_key] = st.slider(
+        st.slider(
             "Zoom",
             0.5,
             3.0,
             float(st.session_state[zoom_key]),
             0.1,
             label_visibility="collapsed",
-            key=f"pv_zoom_slider_{key_suffix}",
+            key=zoom_key,
         )
 
     with render_col2:
-        st.session_state[margin_key] = st.slider(
+        st.slider(
             "Margins",
             0,
             160,
             int(st.session_state[margin_key]),
             4,
             label_visibility="collapsed",
-            key=f"pv_margin_slider_{key_suffix}",
+            key=margin_key,
         )
 
     with render_col3:
@@ -174,17 +171,11 @@ def _single_page_image_viewer(
         value=1.0,
         key=f"pv_sharp_{key_suffix}",
     )
-
-    fmt = st.selectbox(
-        "Format",
-        ["jpg", "png"],
-        key=f"pv_fmt_{key_suffix}",
-    )
+    fmt = st.selectbox("Format", ["jpg", "png"], key=f"pv_fmt_{key_suffix}")
 
     page_1b = int(st.session_state[page_key])
-
     st.caption(
-        f"Page {page_1b}/{page_count}  |  Zoom {st.session_state[zoom_key]:.1f}x  |  Sharp {sharp}x"
+        f"Page {page_1b}/{page_count} | Zoom {float(st.session_state[zoom_key]):.1f}x | Sharp {sharp}x"
     )
 
     mime, img = _render_page_image(
@@ -199,10 +190,10 @@ def _single_page_image_viewer(
         _img_html(
             mime=mime,
             img_bytes=img,
-            margin_px=st.session_state[margin_key],
-            zoom=st.session_state[zoom_key],
+            margin_px=int(st.session_state[margin_key]),
+            zoom=float(st.session_state[zoom_key]),
         )
-
+        
 def _pdf_iframe_viewer(
     *,
     title: str,

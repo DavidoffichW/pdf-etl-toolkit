@@ -279,15 +279,14 @@ class Engine:
         self,
         *,
         file_id: str,
-        blob: bytes,
+        candidates: Sequence[extract.TableCandidate],
         selected_candidate_indices: Sequence[int],
         slice_configs: Dict[int, Dict[str, Any]],
         docs_meta: Sequence[Dict[str, Any]],
         export_format: str,
         include_xlsx: bool,
     ) -> bytes:
-        res = self.detect_tables(file_id=file_id, data=blob)
-        if not res.candidates:
+        if not candidates:
             self._log("WARN", "No candidates available for export.")
             if export_format == "csv":
                 return b""
@@ -301,7 +300,7 @@ class Engine:
             )
 
         indices = [int(i) for i in selected_candidate_indices]
-        indices = [i for i in indices if 0 <= i < len(res.candidates)]
+        indices = [i for i in indices if 0 <= i < len(candidates)]
         if not indices:
             self._log("WARN", "No valid candidate indices selected.")
             if export_format == "csv":
@@ -319,7 +318,7 @@ class Engine:
         out_rows: List[Tuple[str, int, str, int, Sequence[str]]] = []
 
         for idx in indices:
-            cand = res.candidates[idx]
+            cand = candidates[idx]
             grid = self.candidate_to_grid(cand)
 
             cfg = slice_configs.get(idx, {})
@@ -372,7 +371,7 @@ class Engine:
             events=self.get_events(),
             include_xlsx=bool(include_xlsx),
         )
-
+    
     def batch_extract_directory(
         self,
         *,

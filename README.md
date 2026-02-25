@@ -50,7 +50,6 @@ The application is designed to **degrade gracefully** depending on which Python 
 
 These are requirements that are **explicitly planned**, but should be treated as **not implemented** until confirmed in code:
 
-- Batch ETL pipeline: input a directory path with multiple PDFs and run a deterministic extraction across all files
 - Internal in-memory rename/ordering (e.g., logical `1.pdf`, `2.pdf`, …) to guarantee extraction order
 - Cross-PDF extraction: same page + same table index + same (row, col) slice across all PDFs → single consolidated CSV output
 - Stronger table selection UX: selecting table index among tables on a page with preview confirmation
