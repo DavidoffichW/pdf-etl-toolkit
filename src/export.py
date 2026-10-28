@@ -151,6 +151,16 @@ def maybe_build_xlsx_bytes(table: ExportTable) -> Optional[bytes]:
 def _normalize_zip(data: bytes) -> bytes:
     with zipfile.ZipFile(BytesIO(data)) as source:
         members = {name: source.read(name) for name in source.namelist()}
+    core_name = "docProps/core.xml"
+    if core_name in members:
+        members[core_name], replacements = re.subn(
+            rb"(<dcterms:modified\b[^>]*>)[^<]*(</dcterms:modified>)",
+            rb"\g<1>1980-01-01T00:00:00Z\g<2>",
+            members[core_name],
+            count=1,
+        )
+        if replacements != 1:
+            raise ValueError("XLSX core properties contain no unique modified timestamp")
     return _build_zip(members)
 
 
