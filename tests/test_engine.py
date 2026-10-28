@@ -221,3 +221,12 @@ def test_empty_document_has_no_table_and_no_ocr(plan, blank_pdf):
     assert result.status == "NO_TABLE"
     assert result.candidates == []
     assert plan.ocr.status == "DISABLED"
+
+
+def test_scanned_image_document_has_no_table_without_ocr(plan, scanned_pdf):
+    engine = Engine(plan)
+    ingested, _ = engine.ingest("scan.pdf", scanned_pdf)
+    result = engine.detect_tables(ingested.file_id, scanned_pdf)
+    assert result.status == "NO_TABLE"
+    assert result.candidates == []
+    assert plan.ocr.status == "DISABLED"

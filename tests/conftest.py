@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image, ImageDraw
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
@@ -166,6 +167,18 @@ def multiple_tables_pdf() -> bytes:
 @pytest.fixture
 def blank_pdf() -> bytes:
     return build_pdf([{"text": ""}])
+
+
+@pytest.fixture
+def scanned_pdf() -> bytes:
+    image = Image.new("RGB", (420, 320), "white")
+    drawing = ImageDraw.Draw(image)
+    drawing.text((40, 60), "Name  Qty  Price", fill="black")
+    drawing.text((40, 90), "Alpha  2  10", fill="black")
+    output = BytesIO()
+    image.save(output, format="PDF")
+    image.close()
+    return output.getvalue()
 
 
 @pytest.fixture
