@@ -7,17 +7,13 @@ import streamlit as st
 import state
 
 
-SS_SLICE_CONFIG = "slice_config"
-SS_LAST_DETECT = "last_detect_summary"
-
-
 def _slice_key(doc_id: str, candidate_index: int) -> str:
     return f"{doc_id}|{candidate_index}"
 
 
 def _init_slice_state() -> None:
-    if SS_SLICE_CONFIG not in st.session_state:
-        st.session_state[SS_SLICE_CONFIG] = {}
+    if state.SS_SLICE_CONFIG not in st.session_state:
+        st.session_state[state.SS_SLICE_CONFIG] = {}
 
 
 def render_detection_panel(engine: Any) -> None:
@@ -46,7 +42,7 @@ def render_detection_panel(engine: Any) -> None:
         ev_before = len(engine.get_events())
         with st.spinner("Detecting tables..."):
             res = engine.detect_tables(file_id=doc_id, data=blob)
-            st.write([c.page_index for c in res.candidates])
+        state.invalidate_doc_derived(doc_id)
         st.session_state[state.SS_DETECTIONS][doc_id] = res.candidates
         ev_after = engine.get_events()[ev_before:]
         warn_msgs = [e["message"] for e in ev_after if str(e.get("level")) in ("WARN", "ERROR")]
@@ -56,7 +52,7 @@ def render_detection_panel(engine: Any) -> None:
             st.warning("No tables detected.")
         for msg in warn_msgs:
             st.warning(msg)
-        st.session_state[SS_LAST_DETECT] = {
+        st.session_state[state.SS_LAST_DETECT] = {
             "doc_id": doc_id,
             "status": getattr(res, "status", ""),
             "count": len(res.candidates),
@@ -72,7 +68,7 @@ def render_detection_panel(engine: Any) -> None:
     st.subheader("Detected Tables")
 
     confirmed = st.session_state[state.SS_CONFIRMED]
-    slice_cfg = st.session_state[SS_SLICE_CONFIG]
+    slice_cfg = st.session_state[state.SS_SLICE_CONFIG]
 
     for idx, cand in enumerate(candidates):
         key = _slice_key(doc_id, idx)
@@ -84,12 +80,14 @@ def render_detection_panel(engine: Any) -> None:
                 st.write(
                     f"Page {cand.page_index + 1} | "
                     f"Rows: {cand.row_count} | Cols: {cand.col_count} | "
-                    f"Score: {round(float(cand.score), 3)}"
+                    f"Provider: {cand.provider} | Score: {round(float(cand.score), 3)}"
                 )
 
             with c2:
                 selected = confirmed.get(key, False)
                 new_val = st.checkbox("Select", value=selected, key=f"select_{key}")
+                if new_val != selected:
+                    state.clear_interactive_export(doc_id)
                 confirmed[key] = new_val
 
             if confirmed.get(key, False):
@@ -129,11 +127,14 @@ def render_detection_panel(engine: Any) -> None:
                 else:
                     col_val = None
 
-                slice_cfg[key] = {
+                new_config = {
                     "mode": mode,
                     "row": row_val,
                     "column": col_val,
                 }
+                if new_config != cfg:
+                    state.clear_interactive_export(doc_id)
+                slice_cfg[key] = new_config
 
     st.session_state[state.SS_CONFIRMED] = confirmed
-    st.session_state[SS_SLICE_CONFIG] = slice_cfg
+    st.session_state[state.SS_SLICE_CONFIG] = slice_cfg

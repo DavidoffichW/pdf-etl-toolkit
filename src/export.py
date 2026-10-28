@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from io import BytesIO, StringIO
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from utils import canonical_json_bytes, normalize_headers
+
+
+FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
+FIXED_DOCUMENT_TIME = datetime(1980, 1, 1, tzinfo=timezone.utc)
+_DANGEROUS_PREFIX = re.compile(r"^[\x00-\x20]*([=+\-@])")
+_NEGATIVE_NUMBER = re.compile(r"^-(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
 
 @dataclass(frozen=True)
@@ -25,53 +34,80 @@ class ExportTable:
     rows: List[ExportRow]
 
 
+def escape_spreadsheet_value(value: Any) -> str:
+    """Escape formula-like text for CSV and XLSX without changing source state."""
+    text = "" if value is None else str(value)
+    match = _DANGEROUS_PREFIX.match(text)
+    if not match:
+        return text
+    candidate = text.lstrip("\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f"
+                            "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f ")
+    if match.group(1) == "-" and _NEGATIVE_NUMBER.fullmatch(candidate):
+        return text
+    return "'" + text
+
+
 def build_results_csv_bytes(table: ExportTable) -> bytes:
-    headers = ["file_id", "page_index", "candidate_id", "row_index"] + list(table.schema_headers)
-
-    buf = StringIO()
-    writer = csv.writer(buf, lineterminator="\n")
+    headers = ["file_id", "page_index", "candidate_id", "row_index"] + list(
+        table.schema_headers
+    )
+    buffer = StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(headers)
-
-    for r in table.rows:
+    for row in table.rows:
         writer.writerow(
             [
-                r.file_id,
-                str(int(r.page_index)),
-                r.candidate_id,
-                str(int(r.row_index)),
-                *[v if v is not None else "" for v in r.values],
+                row.file_id,
+                str(int(row.page_index)),
+                row.candidate_id,
+                str(int(row.row_index)),
+                *[escape_spreadsheet_value(value) for value in row.values],
             ]
         )
-
-    return buf.getvalue().encode("utf-8")
+    return buffer.getvalue().encode("utf-8")
 
 
 def build_results_jsonl_bytes(table: ExportTable) -> bytes:
-    out = BytesIO()
+    output = BytesIO()
     headers = list(table.schema_headers)
-
-    for r in table.rows:
-        row_obj: Dict[str, Any] = {
-            "file_id": r.file_id,
-            "page_index": int(r.page_index),
-            "candidate_id": r.candidate_id,
-            "row_index": int(r.row_index),
-            "row": {headers[i]: (r.values[i] if r.values[i] is not None else "") for i in range(len(headers))},
+    for row in table.rows:
+        row_object: Dict[str, Any] = {
+            "file_id": row.file_id,
+            "page_index": int(row.page_index),
+            "candidate_id": row.candidate_id,
+            "row_index": int(row.row_index),
+            "row": {
+                headers[index]: (row.values[index] if row.values[index] is not None else "")
+                for index in range(len(headers))
+            },
         }
-        line = json.dumps(row_obj, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        out.write(line)
-        out.write(b"\n")
-
-    return out.getvalue()
+        output.write(
+            json.dumps(
+                row_object,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        output.write(b"\n")
+    return output.getvalue()
 
 
 def build_events_jsonl_bytes(events: List[Dict[str, Any]]) -> bytes:
-    out = BytesIO()
-    for ev in events:
-        line = json.dumps(ev, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        out.write(line)
-        out.write(b"\n")
-    return out.getvalue()
+    """Export reproducible event facts while leaving runtime timestamps in memory."""
+    output = BytesIO()
+    for event in events:
+        export_event = {key: value for key, value in event.items() if key != "timestamp"}
+        output.write(
+            json.dumps(
+                export_event,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        output.write(b"\n")
+    return output.getvalue()
 
 
 def build_manifest_json_bytes(manifest: Dict[str, Any]) -> bytes:
@@ -80,30 +116,61 @@ def build_manifest_json_bytes(manifest: Dict[str, Any]) -> bytes:
 
 def maybe_build_xlsx_bytes(table: ExportTable) -> Optional[bytes]:
     try:
-        import pandas as pd  # type: ignore
+        from openpyxl import Workbook  # type: ignore
     except Exception:
         return None
 
-    data_rows: List[Dict[str, Any]] = []
-    headers = list(table.schema_headers)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "results"
+    workbook.properties.creator = "pdf-etl-toolkit"
+    workbook.properties.lastModifiedBy = "pdf-etl-toolkit"
+    workbook.properties.created = FIXED_DOCUMENT_TIME
+    workbook.properties.modified = FIXED_DOCUMENT_TIME
 
-    for r in table.rows:
-        row_obj: Dict[str, Any] = {
-            "file_id": r.file_id,
-            "page_index": int(r.page_index),
-            "candidate_id": r.candidate_id,
-            "row_index": int(r.row_index),
-        }
-        for i, h in enumerate(headers):
-            row_obj[h] = r.values[i] if r.values[i] is not None else ""
-        data_rows.append(row_obj)
+    worksheet.append(
+        ["file_id", "page_index", "candidate_id", "row_index", *table.schema_headers]
+    )
+    for row in table.rows:
+        worksheet.append(
+            [
+                row.file_id,
+                int(row.page_index),
+                row.candidate_id,
+                int(row.row_index),
+                *[escape_spreadsheet_value(value) for value in row.values],
+            ]
+        )
 
-    df = pd.DataFrame(data_rows)
+    raw = BytesIO()
+    workbook.save(raw)
+    workbook.close()
+    return _normalize_zip(raw.getvalue())
 
-    out = BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="results", index=False)
-    return out.getvalue()
+
+def _normalize_zip(data: bytes) -> bytes:
+    with zipfile.ZipFile(BytesIO(data)) as source:
+        members = {name: source.read(name) for name in source.namelist()}
+    return _build_zip(members)
+
+
+def _build_zip(members: Dict[str, bytes]) -> bytes:
+    output = BytesIO()
+    with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in sorted(members):
+            path = PurePosixPath(name)
+            if path.is_absolute() or ".." in path.parts:
+                raise ValueError(f"unsafe ZIP member name: {name}")
+            info = zipfile.ZipInfo(name, date_time=FIXED_ZIP_TIME)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o100644 << 16
+            archive.writestr(
+                info,
+                members[name],
+                compress_type=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            )
+    return output.getvalue()
 
 
 def build_export_zip(
@@ -113,51 +180,30 @@ def build_export_zip(
     manifest: Dict[str, Any],
     events: List[Dict[str, Any]],
     include_xlsx: bool,
+    extra_members: Optional[Dict[str, bytes]] = None,
 ) -> bytes:
-    """
-    table_headers:
-        Column names for the sliced table. These will be normalized deterministically.
-
-    table_rows:
-        Each row is:
-            (file_id, page_index, candidate_id, row_index, values[])
-        values[] must match length of normalized headers.
-
-    include_xlsx:
-        If True and pandas is available, results.xlsx is included.
-    """
-    norm_headers = normalize_headers(list(table_headers))
-
-    export_rows: List[ExportRow] = []
-    for file_id, page_index, candidate_id, row_index, values in table_rows:
-        export_rows.append(
-            ExportRow(
-                file_id=str(file_id),
-                page_index=int(page_index),
-                candidate_id=str(candidate_id),
-                row_index=int(row_index),
-                values=[("" if v is None else str(v)) for v in list(values)],
-            )
+    normalized_headers = normalize_headers(list(table_headers))
+    rows = [
+        ExportRow(
+            file_id=str(file_id),
+            page_index=int(page_index),
+            candidate_id=str(candidate_id),
+            row_index=int(row_index),
+            values=["" if value is None else str(value) for value in values],
         )
-
-    table = ExportTable(schema_headers=norm_headers, rows=export_rows)
-
-    results_csv = build_results_csv_bytes(table)
-    results_jsonl = build_results_jsonl_bytes(table)
-    manifest_json = build_manifest_json_bytes(manifest)
-    events_jsonl = build_events_jsonl_bytes(events)
-
-    xlsx_bytes: Optional[bytes] = None
+        for file_id, page_index, candidate_id, row_index, values in table_rows
+    ]
+    table = ExportTable(normalized_headers, rows)
+    members = {
+        "events.jsonl": build_events_jsonl_bytes(events),
+        "manifest.json": build_manifest_json_bytes(manifest),
+        "results.csv": build_results_csv_bytes(table),
+        "results.jsonl": build_results_jsonl_bytes(table),
+    }
     if include_xlsx:
-        xlsx_bytes = maybe_build_xlsx_bytes(table)
-
-    zbuf = BytesIO()
-    with zipfile.ZipFile(zbuf, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
-        z.writestr("results.csv", results_csv)
-        z.writestr("results.jsonl", results_jsonl)
-        z.writestr("manifest.json", manifest_json)
-        z.writestr("events.jsonl", events_jsonl)
-        if xlsx_bytes is not None:
-            z.writestr("results.xlsx", xlsx_bytes)
-
-    return zbuf.getvalue()
+        xlsx = maybe_build_xlsx_bytes(table)
+        if xlsx is not None:
+            members["results.xlsx"] = xlsx
+    if extra_members:
+        members.update(extra_members)
+    return _build_zip(members)

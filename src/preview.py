@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from io import BytesIO
 from typing import Literal, Tuple
 
 import streamlit as st
@@ -12,9 +13,12 @@ def _sha16(blob: bytes) -> str:
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
-def _has_pymupdf() -> bool:
+PREVIEW_CACHE_MAX_ENTRIES = 128
+
+
+def _has_pdfium() -> bool:
     try:
-        import fitz
+        import pypdfium2  # type: ignore  # noqa: F401
         return True
     except Exception:
         return False
@@ -60,7 +64,7 @@ def _iframe_pdf(*, pdf_bytes: bytes, page_1b: int, height_px: int, key_suffix: s
     st.markdown(html, unsafe_allow_html=True)
 
 
-@st.cache_data(show_spinner=False, max_entries=2048)
+@st.cache_data(show_spinner=False, max_entries=PREVIEW_CACHE_MAX_ENTRIES)
 def _render_page_image(
     pdf_sha16: str,
     page_index: int,
@@ -68,20 +72,36 @@ def _render_page_image(
     fmt: str,
     pdf_bytes: bytes,
 ) -> Tuple[str, bytes]:
-    import fitz
+    import pypdfium2 as pdfium  # type: ignore
 
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page = doc.load_page(page_index)
-    mat = fitz.Matrix(float(sharp), float(sharp))
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-
-    if fmt.lower() in ("jpg", "jpeg"):
-        try:
-            return "image/jpeg", pix.tobytes("jpeg")
-        except Exception:
-            return "image/png", pix.tobytes("png")
-
-    return "image/png", pix.tobytes("png")
+    document = pdfium.PdfDocument(pdf_bytes)
+    page = None
+    bitmap = None
+    image = None
+    encoded_image = None
+    try:
+        if page_index < 0 or page_index >= len(document):
+            raise ValueError("preview page index is out of range")
+        page = document[page_index]
+        bitmap = page.render(scale=float(sharp))
+        image = bitmap.to_pil()
+        output = BytesIO()
+        if fmt.lower() in {"jpg", "jpeg"}:
+            encoded_image = image if image.mode == "RGB" else image.convert("RGB")
+            encoded_image.save(output, format="JPEG", quality=90)
+            return "image/jpeg", output.getvalue()
+        image.save(output, format="PNG")
+        return "image/png", output.getvalue()
+    finally:
+        if encoded_image is not None and encoded_image is not image:
+            encoded_image.close()
+        if image is not None:
+            image.close()
+        if bitmap is not None:
+            bitmap.close()
+        if page is not None:
+            page.close()
+        document.close()
 
 
 def _single_page_image_viewer(
@@ -92,8 +112,8 @@ def _single_page_image_viewer(
     height_px: int,
     key_suffix: str,
 ) -> None:
-    if not _has_pymupdf():
-        st.warning("Install PyMuPDF for image preview.")
+    if not _has_pdfium():
+        st.warning("Install pypdfium2 and Pillow for image preview.")
         return
 
     st.markdown(f"### {title}")
@@ -178,13 +198,17 @@ def _single_page_image_viewer(
         f"Page {page_1b}/{page_count} | Zoom {float(st.session_state[zoom_key]):.1f}x | Sharp {sharp}x"
     )
 
-    mime, img = _render_page_image(
-        pdf_sha16=pdf_id,
-        page_index=page_1b - 1,
-        sharp=float(sharp),
-        fmt=fmt,
-        pdf_bytes=pdf_bytes,
-    )
+    try:
+        mime, img = _render_page_image(
+            pdf_sha16=pdf_id,
+            page_index=page_1b - 1,
+            sharp=float(sharp),
+            fmt=fmt,
+            pdf_bytes=pdf_bytes,
+        )
+    except Exception as exc:
+        st.error(f"Image preview failed: {exc}")
+        return
 
     with st.container(height=height_px, border=True):
         _img_html(

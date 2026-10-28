@@ -229,7 +229,7 @@ with tab_etl:
 
         docs = state.get_docs()
         if not docs:
-            st.info("Upload PDFs in the PDF Merger tab to start.")
+            st.info("Upload PDFs in the PDF Merger tab for interactive extraction.")
         else:
             changed = _active_doc_selector(docs, "etl")
             if changed:
@@ -239,7 +239,10 @@ with tab_etl:
             detection_ui.render_detection_panel(engine)
 
             st.divider()
-            export_ui.render_export_panel(engine)
+            export_ui.render_interactive_export_panel(engine)
+
+        st.divider()
+        export_ui.render_batch_export_panel(engine)
 
     with right:
         st.subheader("Preview")

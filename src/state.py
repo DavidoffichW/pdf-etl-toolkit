@@ -11,7 +11,7 @@ class Capabilities:
     pdf_tables: bool
     ocr: bool
     nlp: bool
-    pandas: bool
+    xlsx: bool
 
 
 SS_CAPS_RAW = "caps_raw"
@@ -32,6 +32,10 @@ SS_PAGE_MAP = "page_map"
 SS_DETECTIONS = "detections"
 SS_CONFIRMED = "confirmed_slices"
 SS_EVENTS = "events"
+SS_SLICE_CONFIG = "slice_config"
+SS_LAST_DETECT = "last_detect_summary"
+SS_INTERACTIVE_EXPORT = "interactive_export_result"
+SS_BATCH_EXPORT = "batch_export_result"
 
 SS_UPLOADER_KEY = "uploader_widget"
 SS_UPLOADER_TOKEN = "uploader_token"
@@ -50,20 +54,20 @@ def caps_from_detect(d: Dict[str, Any]) -> Capabilities:
     export_providers = set(export_caps.providers) if export_caps else set()
     nlp_providers = set(nlp_caps.providers) if nlp_caps else set()
 
-    has_pymupdf = "fitz" in pdf_providers
     has_pypdf = "pypdf" in pdf_providers
+    has_pdfium = "pypdfium2" in pdf_providers
 
-    has_pdf_tables = ("pdfplumber" in tables_providers) or ("pymupdf_tables" in tables_providers)
-    has_pandas = ("pandas" in export_providers) or ("pandas" in tables_providers)
+    has_pdf_tables = "pdfplumber" in tables_providers
+    has_xlsx = "openpyxl" in export_providers
     has_ocr = ("pytesseract" in ocr_providers) and ("PIL" in ocr_providers)
 
     return Capabilities(
-        pdf_text=has_pymupdf or has_pypdf,
-        pdf_images=has_pymupdf,
+        pdf_text=has_pypdf,
+        pdf_images=has_pdfium,
         pdf_tables=has_pdf_tables,
         ocr=has_ocr,
         nlp=bool(nlp_providers),
-        pandas=has_pandas,
+        xlsx=has_xlsx,
     )
 
 
@@ -103,6 +107,14 @@ def init_state(*, caps_raw: Dict[str, Any], caps: Capabilities, plan: Any, plan_
 
     if SS_EVENTS not in st.session_state:
         st.session_state[SS_EVENTS] = []
+    if SS_SLICE_CONFIG not in st.session_state:
+        st.session_state[SS_SLICE_CONFIG] = {}
+    if SS_LAST_DETECT not in st.session_state:
+        st.session_state[SS_LAST_DETECT] = {}
+    if SS_INTERACTIVE_EXPORT not in st.session_state:
+        st.session_state[SS_INTERACTIVE_EXPORT] = {}
+    if SS_BATCH_EXPORT not in st.session_state:
+        st.session_state[SS_BATCH_EXPORT] = {}
 
     if SS_UPLOADER_TOKEN not in st.session_state:
         st.session_state[SS_UPLOADER_TOKEN] = 0
@@ -211,6 +223,47 @@ def set_page_map(m: List[Tuple[str, int]]) -> None:
     st.session_state[SS_PAGE_MAP] = m
 
 
+def clear_interactive_export(doc_id: str) -> None:
+    import streamlit as st
+
+    exports = dict(st.session_state.get(SS_INTERACTIVE_EXPORT, {}))
+    exports.pop(doc_id, None)
+    st.session_state[SS_INTERACTIVE_EXPORT] = exports
+
+
+def clear_batch_export() -> None:
+    import streamlit as st
+
+    st.session_state[SS_BATCH_EXPORT] = {}
+
+
+def invalidate_doc_derived(doc_id: str) -> None:
+    """Remove state derived from one document while preserving other documents."""
+    import streamlit as st
+
+    detections = dict(st.session_state.get(SS_DETECTIONS, {}))
+    detections.pop(doc_id, None)
+    st.session_state[SS_DETECTIONS] = detections
+
+    confirmed = dict(st.session_state.get(SS_CONFIRMED, {}))
+    for key in list(confirmed):
+        if key.startswith(doc_id + "|"):
+            confirmed.pop(key, None)
+    st.session_state[SS_CONFIRMED] = confirmed
+
+    slices = dict(st.session_state.get(SS_SLICE_CONFIG, {}))
+    for key in list(slices):
+        if key.startswith(doc_id + "|"):
+            slices.pop(key, None)
+    st.session_state[SS_SLICE_CONFIG] = slices
+
+    clear_interactive_export(doc_id)
+
+    last_detect = st.session_state.get(SS_LAST_DETECT, {})
+    if isinstance(last_detect, dict) and last_detect.get("doc_id") == doc_id:
+        st.session_state[SS_LAST_DETECT] = {}
+
+
 def replace_doc_id(old_id: str, new_id: str, new_meta: Dict[str, Any], new_blob: bytes) -> None:
     import streamlit as st
 
@@ -233,13 +286,4 @@ def replace_doc_id(old_id: str, new_id: str, new_meta: Dict[str, Any], new_blob:
         st.session_state[SS_ACTIVE_DOC] = new_id
         st.session_state[SS_ACTIVE_PAGE] = 1
 
-    det = dict(st.session_state[SS_DETECTIONS])
-    if old_id in det:
-        det.pop(old_id, None)
-    st.session_state[SS_DETECTIONS] = det
-
-    conf = dict(st.session_state[SS_CONFIRMED])
-    for k in list(conf.keys()):
-        if k.startswith(old_id + "|"):
-            conf.pop(k, None)
-    st.session_state[SS_CONFIRMED] = conf
+    invalidate_doc_derived(old_id)

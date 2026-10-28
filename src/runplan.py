@@ -38,9 +38,9 @@ def build_run_plan(capabilities: Optional[Dict[str, Capability]] = None) -> RunP
     ocr_cap = caps["ocr"]
     export_cap = caps["export"]
 
-    pdf_provider = _pick_first_available(pdf_cap, ["fitz", "pypdf"])
+    pdf_provider = _pick_first_available(pdf_cap, ["pypdf"])
     if pdf_provider is None:
-        raise RuntimeError("No PDF provider available. Install either 'fitz' or 'pypdf'.")
+        raise RuntimeError("No PDF provider available. Install 'pypdf'.")
 
     pdf_plan = ProviderPlan(
         capability="pdf",
@@ -49,13 +49,13 @@ def build_run_plan(capabilities: Optional[Dict[str, Capability]] = None) -> RunP
         reason=None,
     )
 
-    tables_provider = _pick_first_available(tables_cap, ["pdfplumber", "pymupdf_tables"])
+    tables_provider = _pick_first_available(tables_cap, ["pdfplumber"])
     if tables_provider is None:
         tables_plan = ProviderPlan(
             capability="tables",
             provider=None,
             status="DISABLED",
-            reason="No table provider available. Install 'fitz' (PyMuPDF) and/or 'pdfplumber'.",
+            reason="No table provider available. Install 'pdfplumber'.",
         )
     else:
         tables_status = "OK"
