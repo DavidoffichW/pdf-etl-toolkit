@@ -1,244 +1,101 @@
-# pdf-etl-toolkit
+# PDF ETL Toolkit
 
-A deterministic, workflow-oriented PDF ingestion and ETL utility built as a single Streamlit application.
+PDF ETL Toolkit is a local Streamlit application for assembling PDFs and exporting detected tables as structured data. It supports interactive work on uploaded documents and non-recursive batch extraction from a local directory.
 
-This project focuses on **controlled document transformation** rather than freeform editing:
-- ingest PDFs
-- reorder and merge
-- preview PDFs via image rendering
-- extract tables and export structured outputs (capability-dependent)
+The application is designed for trusted, single-user local operation. It has no authentication, persistent document store, or OCR pipeline.
 
-The application is designed to **degrade gracefully** depending on which Python libraries are available on a user machine.
+## Features
 
----
+- Upload, order, merge, extract pages from, and delete pages from PDFs.
+- Preview PDFs in the browser or render individual pages as images.
+- Detect tables independently on each page using this preference order:
+  1. `pdfplumber`
+  2. PyMuPDF
+  3. a text-grid heuristic
+- Select whole tables, rows, columns, or cells for export.
+- Export CSV directly, or create a ZIP containing CSV, JSONL, a manifest, an event log, and optionally XLSX.
+- Run the same extraction against the PDFs immediately inside a local directory, with per-file failure reporting and resource limits.
 
-## Key Principles
+Detection is best-effort. Provider errors are reported separately from a valid "no table found" result. OCR libraries may be detected by the capability display, but scanned-image OCR is not implemented.
 
-- **Deterministic outputs**: predictable behavior, stable ordering, auditable selection inputs.
-- **Ephemeral run**: no persistent server-side workspace; outputs are produced for download.
-- **Capability-aware**: features enable/disable automatically based on installed dependencies.
-- **Single command run**: `streamlit run app.py`
+## Requirements and installation
 
----
-
-## Current Feature Surface (Implemented)
-
-### Document handling
-- Upload multiple PDFs
-- Arrange document order
-- Merge into a single PDF
-- Download merged PDF
-
-### Preview
-- PDF preview via iframe for “normal” PDFs
-- Heavy-PDF fallback to image-based preview (single-page) with:
-  - working Prev/Next navigation
-  - page jump
-  - zoom (visual scale)
-  - sharpness (render resolution)
-  - margins control
-  - “Fit” reset
-
-### Environment & capabilities
-- Capabilities detection and UI exposure (feature gating)
-
-> Note: The preview layer is explicitly designed to be replaceable in a future Django + FastAPI implementation where PDF.js and multi-format viewers will be feasible.
-
----
-
-## Table Detection Strategy
-
-Detection uses a deterministic provider cascade:
-
-1. `pdfplumber` (preferred when available)
-2. `pymupdf` (`page.find_tables()`)
-3. Deterministic text-grid heuristic fallback
-
-The heuristic fallback:
-
-- Requires ≥ 3 rows
-- Groups words by Y-alignment
-- Infers column anchors
-- Produces export-compatible structured cells
-
-Detection stops once a provider yields at least one candidate.
-
----
-
-## Export Behavior
-
-### CSV Export
-
-- Exactly one table must be selected
-- Schema is derived from first row
-- Deterministic ordering
-- Inline CSV preview available before download
-
-### JSONL Export
-
-- JSONL preview displayed in UI
-- Deterministic record structure
-- Available inside ZIP export package
-
-### ZIP Export
-
-Contains:
-
-- CSV (if applicable)
-- JSONL manifest
-- Event log
-
-All exports are stateless and deterministic.
-
----
-
-## UI Improvements
-
-- Working Prev / Next navigation in preview
-- Detection feedback
-- Inline CSV preview
-- Inline JSONL preview
-- Export warnings surfaced to UI
-- Spinner indicators during detection and export
-
----
-
-## Repository Structure
-
-```text
-pdf-etl-toolkit/
-  app.py
-  requirements.txt
-  README.md
-  src/
-    capabilities.py
-    detection_ui.py
-    engine.py
-    export.py
-    export_ui.py
-    extract.py
-    ordering.py
-    preview.py
-    runplan.py
-    state.py
-    utils.py
-    workspace.py
-```
-
----
-
-## Installation (Windows)
-
-### 1) Create and activate a virtual environment
-
-From `cmd.exe`:
-
-```bat
-cd path\to\pdf-etl-toolkit
-python -m venv venv
-venv\Scripts\activate
-```
-
-### 2) Install dependencies
-
-```bat
-pip install -r requirements.txt
-```
-
-### 3) Run the app
-
-```bat
-streamlit run app.py
-```
-
----
-
-## Installation (Linux / macOS)
+The v0.1.0 candidate targets Python 3.10 through 3.13 on Windows and Linux.
 
 ```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m streamlit run app.py --server.address 127.0.0.1
 ```
 
----
+The checked-in Streamlit configuration also binds the app to `127.0.0.1`. Do not expose this application to untrusted network clients: batch mode accepts a server-side directory path and is intended only for trusted local use.
 
-## Capability Model (Graceful Degradation)
+PyMuPDF is distributed under AGPL and commercial licensing options. Users and distributors are responsible for choosing and complying with an appropriate license; this repository's MIT license does not grant rights to PyMuPDF. See the [PyMuPDF licensing documentation](https://pymupdf.readthedocs.io/en/latest/about.html#license-and-copyright).
 
-The app exposes features depending on what is available:
+## Interactive workflow
 
-* `pypdf` → basic PDF reading/merging
-* `pymupdf (fitz)` → robust page rendering for image preview (recommended)
-* `pdfplumber` → table detection/extraction provider
-* `pandas` → DataFrame-based processing and structured export
+1. Upload one or more PDFs. Identical content uploaded more than once in the same batch is kept as one document.
+2. Reorder documents, merge them, or apply page extraction/deletion operations.
+3. Choose a preview mode and inspect a document.
+4. Run table detection, select candidates, and select a table/row/column/cell slice.
+5. Generate CSV or ZIP output.
 
-If a capability is missing:
+Changing or removing source documents, applying page operations, or rerunning detection invalidates selections and generated exports that no longer correspond to the current source.
 
-* the UI shows the feature as disabled or warns that installation is required
-* the rest of the app remains functional
+## Batch workflow and limits
 
----
+Batch extraction is available without an interactive upload. It scans only the immediate `.pdf` files in the chosen directory and processes them in stable, case-insensitive filename order.
 
-## Usage Guide
+Default limits are:
 
-### 1) Upload and manage documents
+| Limit | Default |
+|---|---:|
+| PDF entries | 100 |
+| One PDF | 50 MiB |
+| Total accepted PDF bytes | 250 MiB |
+| Processed pages | 2,000 |
 
-* Upload one or more PDFs.
-* Arrange order as required (document order affects merged output).
-* Merge and download the merged PDF.
+Files are checked before full reads where practical, and reads are bounded to the per-file limit. Symlink and Windows reparse-point directory roots and PDF entries are rejected. Malformed, encrypted, inaccessible, unsupported, or out-of-range files fail independently and appear in the batch report. These limits are conservative controls for the application's in-memory processing model; they are not performance benchmarks or an operating-system sandbox.
 
-### 2) Preview
+## Export contract
 
-* Choose preview mode:
+CSV rows use these provenance fields followed by explicit data columns:
 
-  * **PDF (iframe)** for normal PDFs
-  * **Images (single-page)** for heavy or problematic PDFs
-* In image preview:
+```text
+file_id,page_index,candidate_id,row_index,col_1,col_2,...
+```
 
-  * Use Prev/Next or Page input
-  * Zoom controls visual scaling
-  * Sharpness controls render resolution
-  * Margins adjust whitespace inside the preview container
-  * Fit resets Zoom and Margins to defaults
+The detected first row is retained as data. It is not silently promoted to a header. Batch exports add `seq` and `source_filename` before the `col_N` columns.
 
-### 3) Extraction / Export
+CSV and XLSX exports prefix formula-like text with an apostrophe when a value begins, after whitespace or control characters, with `=`, `+`, `-`, or `@`. Negative numeric values such as `-12.5` remain numeric-looking text. JSONL retains the extracted source text. This is a defensive policy for common spreadsheet clients, not universal protection for every importer.
 
-* Table extraction and export depend on installed providers.
-* Ensure `pdfplumber` and `pandas` are installed for table-driven CSV outputs.
+For identical input bytes, options, provider outputs, and dependency versions, CSV, JSONL, XLSX, and ZIP output is byte-reproducible. ZIP member order, timestamps, permissions, and compression settings are fixed. Runtime UI timestamps remain available in memory but are omitted from reproducible structured exports.
 
----
+## Capability behavior
 
-## Troubleshooting
+- `pypdf` supplies ordinary PDF parsing and document transformations.
+- PyMuPDF supplies image previews, table detection fallback, and a PDF transformation fallback.
+- `pdfplumber` is the preferred table detector.
+- `openpyxl` supplies optional XLSX output.
 
-### Preview works for some PDFs but blank for others
+If a table provider fails to initialize or fails on a page, detection continues with the next provider for the affected page. A table found on one page does not suppress fallback on another page.
 
-* Heavy publisher PDFs can fail in browser-native PDF viewers when embedded.
-* Switch preview renderer to **Images (single-page)** (requires `pymupdf`).
+## Development
 
-### “Duplicate widget key” errors
+Install the development requirements and run the tests:
 
-* Streamlit requires globally unique widget keys per render.
-* Keys must be suffixed by context (e.g., per tab) to avoid collisions.
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+python tests/smoke_streamlit.py
+```
 
-### Streamlit warns about `use_container_width`
+The test suite uses generated PDFs and fabricated table values. GitHub Actions runs the functional suite and a headless Streamlit startup check on Windows and Ubuntu.
 
-* Streamlit is deprecating `use_container_width`.
-* Use `st.image(..., width="stretch")` instead.
+## Data and security boundaries
 
-### Install failures on locked-down machines
+Uploaded bytes and generated outputs live in Streamlit session memory. They are not written to a project database. Browser downloads and the selected batch directory remain under the operator's control.
 
-* Prefer wheel installs where possible.
-* If `pymupdf` is problematic, the app will still run, but preview fallback will be reduced.
-
----
-
-## Security / Data Handling
-
-* **Ephemeral run model**: the app does not require persistent storage as part of the intended workflow.
-* Files are handled in memory or temporary runtime context.
-* Outputs are provided for **download-only**.
-
-If you need persistent document storage, multi-user access, and audit trails:
-
-* this is planned for a future Django + FastAPI architecture.
+The toolkit is not a malware scanner, secrets detector, multi-user document service, or general filesystem sandbox. Review source PDFs and generated exports before sharing them.
