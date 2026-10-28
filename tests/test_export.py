@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import csv
+import datetime
 import json
 import zipfile
 from io import BytesIO, StringIO
+from types import SimpleNamespace
 
 import pytest
 from openpyxl import load_workbook
@@ -89,7 +91,22 @@ def test_export_schema_keeps_first_detected_row_as_data():
     assert rows[1][-2:] == ["Header A", "Header B"]
 
 
-def test_xlsx_and_outer_zip_are_byte_reproducible():
+def test_xlsx_and_outer_zip_are_byte_reproducible(monkeypatch):
+    import openpyxl.writer.excel as excel_writer
+
+    class MovingClock(datetime.datetime):
+        calls = 0
+
+        @classmethod
+        def now(cls, tz=None):
+            cls.calls += 1
+            return datetime.datetime(2030, 1, 1, 0, 0, cls.calls, tzinfo=tz)
+
+    monkeypatch.setattr(
+        excel_writer,
+        "datetime",
+        SimpleNamespace(datetime=MovingClock, timezone=datetime.timezone),
+    )
     table = _table(["alpha", "=1+1"])
     xlsx_one = export.maybe_build_xlsx_bytes(table)
     xlsx_two = export.maybe_build_xlsx_bytes(table)
