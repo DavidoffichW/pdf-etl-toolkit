@@ -14,14 +14,6 @@ def _have_pypdf() -> bool:
         return False
 
 
-def _have_fitz() -> bool:
-    try:
-        import fitz  # type: ignore
-        return True
-    except Exception:
-        return False
-
-
 def _merge_pdfs(blobs: List[bytes]) -> bytes:
     if _have_pypdf():
         from pypdf import PdfReader, PdfWriter  # type: ignore
@@ -33,14 +25,6 @@ def _merge_pdfs(blobs: List[bytes]) -> bytes:
         out = BytesIO()
         w.write(out)
         return out.getvalue()
-
-    if _have_fitz():
-        import fitz  # type: ignore
-        with fitz.open() as out_doc:
-            for blob in blobs:
-                with fitz.open(stream=blob, filetype="pdf") as source:
-                    out_doc.insert_pdf(source)
-            return out_doc.tobytes()
 
     raise RuntimeError("No PDF merge provider available.")
 
@@ -59,13 +43,6 @@ def _extract_pages(blob: bytes, start_1b: int, end_1b: int) -> bytes:
         out = BytesIO()
         w.write(out)
         return out.getvalue()
-
-    if _have_fitz():
-        import fitz  # type: ignore
-        with fitz.open(stream=blob, filetype="pdf") as source, fitz.open() as output:
-            end = min(end, source.page_count - 1)
-            output.insert_pdf(source, from_page=start, to_page=end)
-            return output.tobytes()
 
     raise RuntimeError("No PDF provider available.")
 
@@ -87,14 +64,6 @@ def _delete_pages(blob: bytes, start_1b: int, end_1b: int) -> bytes:
         out = BytesIO()
         w.write(out)
         return out.getvalue()
-
-    if _have_fitz():
-        import fitz  # type: ignore
-        with fitz.open(stream=blob, filetype="pdf") as source, fitz.open() as output:
-            keep = [i for i in range(source.page_count) if not (start <= i <= end)]
-            for i in keep:
-                output.insert_pdf(source, from_page=i, to_page=i)
-            return output.tobytes()
 
     raise RuntimeError("No PDF provider available.")
 

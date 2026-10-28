@@ -54,16 +54,16 @@ def caps_from_detect(d: Dict[str, Any]) -> Capabilities:
     export_providers = set(export_caps.providers) if export_caps else set()
     nlp_providers = set(nlp_caps.providers) if nlp_caps else set()
 
-    has_pymupdf = "fitz" in pdf_providers
     has_pypdf = "pypdf" in pdf_providers
+    has_pdfium = "pypdfium2" in pdf_providers
 
-    has_pdf_tables = ("pdfplumber" in tables_providers) or ("pymupdf_tables" in tables_providers)
+    has_pdf_tables = "pdfplumber" in tables_providers
     has_xlsx = "openpyxl" in export_providers
     has_ocr = ("pytesseract" in ocr_providers) and ("PIL" in ocr_providers)
 
     return Capabilities(
-        pdf_text=has_pymupdf or has_pypdf,
-        pdf_images=has_pymupdf,
+        pdf_text=has_pypdf,
+        pdf_images=has_pdfium,
         pdf_tables=has_pdf_tables,
         ocr=has_ocr,
         nlp=bool(nlp_providers),

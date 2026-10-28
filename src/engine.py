@@ -116,49 +116,29 @@ class Engine:
         return ingested, page_infos
 
     def _extract_page_metadata(self, file_id: str, data: bytes) -> Tuple[int, List[PageInfo]]:
-        provider = self.run_plan.pdf.provider
+        if self.run_plan.pdf.provider != "pypdf":
+            raise RuntimeError("No valid PDF provider configured in RunPlan.")
 
-        if provider == "fitz":
-            import fitz  # type: ignore
+        from pypdf import PdfReader  # type: ignore
 
-            page_infos: List[PageInfo] = []
-            with fitz.open(stream=data, filetype="pdf") as document:
-                for i in range(len(document)):
-                    page = document[i]
-                    rect = page.rect
-                    page_infos.append(
-                        PageInfo(
-                            file_id=file_id,
-                            page_index=i,
-                            width=float(rect.width),
-                            height=float(rect.height),
-                        )
-                    )
-                return len(document), page_infos
-
-        if provider == "pypdf":
-            from pypdf import PdfReader  # type: ignore
-
-            reader = PdfReader(BytesIO(data))
-            page_infos = []
-            for i, page in enumerate(reader.pages):
-                try:
-                    width = float(page.mediabox.width)
-                    height = float(page.mediabox.height)
-                except Exception:
-                    width = 0.0
-                    height = 0.0
-                page_infos.append(
-                    PageInfo(
-                        file_id=file_id,
-                        page_index=i,
-                        width=width,
-                        height=height,
-                    )
+        reader = PdfReader(BytesIO(data))
+        page_infos: List[PageInfo] = []
+        for i, page in enumerate(reader.pages):
+            try:
+                width = float(page.mediabox.width)
+                height = float(page.mediabox.height)
+            except Exception:
+                width = 0.0
+                height = 0.0
+            page_infos.append(
+                PageInfo(
+                    file_id=file_id,
+                    page_index=i,
+                    width=width,
+                    height=height,
                 )
-            return len(reader.pages), page_infos
-
-        raise RuntimeError("No valid PDF provider configured in RunPlan.")
+            )
+        return len(reader.pages), page_infos
 
     def build_manifest(self, ingested_files: List[IngestedFile]) -> Dict[str, Any]:
         manifest = {

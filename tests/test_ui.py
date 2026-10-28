@@ -32,6 +32,15 @@ def test_identical_files_in_one_upload_are_deduplicated(plain_pdf):
     assert app.session_state["docs"][0]["filename"] == "first-name.pdf"
 
 
+def test_pdfium_image_preview_ui_transition(plain_pdf):
+    app = _app()
+    app.get("file_uploader")[0].upload("plain.pdf", plain_pdf, "application/pdf").run()
+    renderer = [radio for radio in app.radio if radio.label == "Preview renderer"][0]
+    renderer.set_value("Images (single-page)").run()
+    assert not app.exception
+    assert any("data:image/jpeg;base64," in item.value for item in app.markdown)
+
+
 def test_detection_selection_and_export_transition(grid_pdf):
     app = _app()
     app.get("file_uploader")[0].upload("grid.pdf", grid_pdf, "application/pdf").run()

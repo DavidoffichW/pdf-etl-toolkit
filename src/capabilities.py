@@ -24,21 +24,17 @@ def _try_import(module_name: str) -> bool:
 def detect_capabilities() -> Dict[str, Capability]:
     pdf_providers: List[str] = []
     pdf_missing: List[str] = []
-    if _try_import("fitz"):
-        pdf_providers.append("fitz")
-    else:
-        pdf_missing.append("fitz")
     if _try_import("pypdf"):
         pdf_providers.append("pypdf")
     else:
         pdf_missing.append("pypdf")
+    if _try_import("pypdfium2"):
+        pdf_providers.append("pypdfium2")
+    else:
+        pdf_missing.append("pypdfium2")
 
     tables_providers: List[str] = []
     tables_missing: List[str] = []
-    if _try_import("fitz"):
-        tables_providers.append("pymupdf_tables")
-    else:
-        tables_missing.append("fitz")
     if _try_import("pdfplumber"):
         tables_providers.append("pdfplumber")
     else:
@@ -68,14 +64,14 @@ def detect_capabilities() -> Dict[str, Capability]:
             available=len(pdf_providers) > 0,
             providers=pdf_providers,
             missing_modules=pdf_missing,
-            notes=None,
+            notes="pypdf handles documents; pypdfium2 enables image previews",
         ),
         "tables": Capability(
             name="tables",
             available=len(tables_providers) > 0,
             providers=tables_providers,
             missing_modules=tables_missing,
-            notes="pymupdf_tables requires fitz; pdfplumber is optional alternative",
+            notes="pdfplumber provides normal and text-oriented table detection",
         ),
         "ocr": Capability(
             name="ocr",

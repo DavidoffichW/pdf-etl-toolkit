@@ -9,9 +9,8 @@ The application is designed for trusted, single-user local operation. It has no 
 - Upload, order, merge, extract pages from, and delete pages from PDFs.
 - Preview PDFs in the browser or render individual pages as images.
 - Detect tables independently on each page using this preference order:
-  1. `pdfplumber`
-  2. PyMuPDF
-  3. a text-grid heuristic
+  1. `pdfplumber`'s normal table detector
+  2. a deterministic `pdfplumber`/PDFMiner word-grid fallback
 - Select whole tables, rows, columns, or cells for export.
 - Export CSV directly, or create a ZIP containing CSV, JSONL, a manifest, an event log, and optionally XLSX.
 - Run the same extraction against the PDFs immediately inside a local directory, with per-file failure reporting and resource limits.
@@ -32,7 +31,7 @@ python -m streamlit run app.py --server.address 127.0.0.1
 
 The checked-in Streamlit configuration also binds the app to `127.0.0.1`. Do not expose this application to untrusted network clients: batch mode accepts a server-side directory path and is intended only for trusted local use.
 
-PyMuPDF is distributed under AGPL and commercial licensing options. Users and distributors are responsible for choosing and complying with an appropriate license; this repository's MIT license does not grant rights to PyMuPDF. See the [PyMuPDF licensing documentation](https://pymupdf.readthedocs.io/en/latest/about.html#license-and-copyright).
+The application uses `pypdfium2` and Pillow for image previews. The installed `pypdfium2` wheel includes PDFium and bundled third-party license notices; preserve those notices when redistributing its binaries. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Interactive workflow
 
@@ -76,11 +75,13 @@ For identical input bytes, options, provider outputs, and dependency versions, C
 ## Capability behavior
 
 - `pypdf` supplies ordinary PDF parsing and document transformations.
-- PyMuPDF supplies image previews, table detection fallback, and a PDF transformation fallback.
-- `pdfplumber` is the preferred table detector.
+- `pypdfium2` and Pillow supply single-page image previews.
+- `pdfplumber` supplies normal table detection and the text-oriented fallback.
 - `openpyxl` supplies optional XLSX output.
 
 If a table provider fails to initialize or fails on a page, detection continues with the next provider for the affected page. A table found on one page does not suppress fallback on another page.
+
+The word-grid fallback groups positioned words into rows and column anchors. It handles regular born-digital text tables, but it may not reproduce irregular layouts, spanning cells, or implicit grouping as accurately as a ruled-table detector. Image-only documents remain unsupported because OCR is not implemented.
 
 ## Development
 

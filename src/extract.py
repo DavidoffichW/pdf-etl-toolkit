@@ -43,21 +43,7 @@ def _has_pdfplumber() -> bool:
         return False
 
 
-def _has_fitz() -> bool:
-    try:
-        import fitz  # type: ignore  # noqa: F401
-        return True
-    except Exception:
-        return False
-
-
 def _page_count(data: bytes, run_plan: RunPlan) -> int:
-    if run_plan.pdf.provider == "fitz" and _has_fitz():
-        import fitz  # type: ignore
-
-        with fitz.open(stream=data, filetype="pdf") as document:
-            return int(document.page_count)
-
     from pypdf import PdfReader  # type: ignore
 
     return len(PdfReader(BytesIO(data)).pages)
@@ -73,11 +59,9 @@ def detect_tables(file_id: str, data: bytes, run_plan: RunPlan) -> DetectionResu
     errors: List[str] = []
     providers = []
     if _has_pdfplumber():
-        providers.append(("pdfplumber", _detect_with_pdfplumber))
-    if _has_fitz():
         providers.extend(
             [
-                ("pymupdf", _detect_with_pymupdf),
+                ("pdfplumber", _detect_with_pdfplumber),
                 ("text_grid", _detect_with_text_grid_heuristic),
             ]
         )
@@ -110,42 +94,6 @@ def detect_tables(file_id: str, data: bytes, run_plan: RunPlan) -> DetectionResu
     if attempted and errors:
         return DetectionResult("FAILED", [], errors)
     return DetectionResult("NO_TABLE", [], [])
-
-
-def _detect_with_pymupdf(
-    file_id: str,
-    data: bytes,
-    page_indices: Sequence[int],
-) -> Tuple[List[TableCandidate], List[str]]:
-    import fitz  # type: ignore
-
-    candidates: List[TableCandidate] = []
-    errors: List[str] = []
-    with fitz.open(stream=data, filetype="pdf") as document:
-        for page_index in page_indices:
-            try:
-                tables = document.load_page(page_index).find_tables()
-            except Exception as exc:
-                errors.append(f"pymupdf page {page_index + 1} failed: {exc}")
-                continue
-            for table_index, table in enumerate(tables.tables if tables else []):
-                try:
-                    candidate = _candidate_from_rows(
-                        file_id=file_id,
-                        page_index=page_index,
-                        table_index=table_index,
-                        provider="pymupdf",
-                        bbox=tuple(float(value) for value in table.bbox),
-                        raw=table.extract(),
-                    )
-                except Exception as exc:
-                    errors.append(
-                        f"pymupdf page {page_index + 1} table {table_index + 1} failed: {exc}"
-                    )
-                    continue
-                if candidate is not None:
-                    candidates.append(candidate)
-    return candidates, errors
 
 
 def _detect_with_pdfplumber(
@@ -231,14 +179,23 @@ def _detect_with_text_grid_heuristic(
     data: bytes,
     page_indices: Sequence[int],
 ) -> Tuple[List[TableCandidate], List[str]]:
-    import fitz  # type: ignore
+    import pdfplumber  # type: ignore
 
     candidates: List[TableCandidate] = []
     errors: List[str] = []
-    with fitz.open(stream=data, filetype="pdf") as document:
+    with pdfplumber.open(BytesIO(data)) as document:
         for page_index in page_indices:
+            if page_index >= len(document.pages):
+                errors.append(f"text_grid page {page_index + 1} is unavailable")
+                continue
             try:
-                candidate = _heuristic_candidate(file_id, page_index, document.load_page(page_index))
+                words = document.pages[page_index].extract_words(
+                    x_tolerance=1,
+                    y_tolerance=3,
+                    keep_blank_chars=False,
+                    use_text_flow=False,
+                )
+                candidate = _heuristic_candidate(file_id, page_index, words)
             except Exception as exc:
                 errors.append(f"text_grid page {page_index + 1} failed: {exc}")
                 continue
@@ -247,12 +204,21 @@ def _detect_with_text_grid_heuristic(
     return candidates, errors
 
 
-def _heuristic_candidate(file_id: str, page_index: int, page: Any) -> Optional[TableCandidate]:
-    words = page.get_text("words") or []
+def _heuristic_candidate(
+    file_id: str,
+    page_index: int,
+    words: Sequence[Dict[str, Any]],
+) -> Optional[TableCandidate]:
     items = [
-        (float(word[0]), float(word[1]), float(word[2]), float(word[3]), str(word[4]).strip())
+        (
+            float(word["x0"]),
+            float(word["top"]),
+            float(word["x1"]),
+            float(word["bottom"]),
+            str(word["text"]).strip(),
+        )
         for word in words
-        if word[4] is not None and str(word[4]).strip()
+        if word.get("text") is not None and str(word["text"]).strip()
     ]
     if not items:
         return None
