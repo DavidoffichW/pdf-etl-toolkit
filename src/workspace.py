@@ -36,11 +36,11 @@ def _merge_pdfs(blobs: List[bytes]) -> bytes:
 
     if _have_fitz():
         import fitz  # type: ignore
-        out_doc = fitz.open()
-        for blob in blobs:
-            d = fitz.open(stream=blob, filetype="pdf")
-            out_doc.insert_pdf(d)
-        return out_doc.tobytes()
+        with fitz.open() as out_doc:
+            for blob in blobs:
+                with fitz.open(stream=blob, filetype="pdf") as source:
+                    out_doc.insert_pdf(source)
+            return out_doc.tobytes()
 
     raise RuntimeError("No PDF merge provider available.")
 
@@ -62,11 +62,10 @@ def _extract_pages(blob: bytes, start_1b: int, end_1b: int) -> bytes:
 
     if _have_fitz():
         import fitz  # type: ignore
-        src = fitz.open(stream=blob, filetype="pdf")
-        out = fitz.open()
-        end = min(end, src.page_count - 1)
-        out.insert_pdf(src, from_page=start, to_page=end)
-        return out.tobytes()
+        with fitz.open(stream=blob, filetype="pdf") as source, fitz.open() as output:
+            end = min(end, source.page_count - 1)
+            output.insert_pdf(source, from_page=start, to_page=end)
+            return output.tobytes()
 
     raise RuntimeError("No PDF provider available.")
 
@@ -91,12 +90,11 @@ def _delete_pages(blob: bytes, start_1b: int, end_1b: int) -> bytes:
 
     if _have_fitz():
         import fitz  # type: ignore
-        src = fitz.open(stream=blob, filetype="pdf")
-        out = fitz.open()
-        keep = [i for i in range(src.page_count) if not (start <= i <= end)]
-        for i in keep:
-            out.insert_pdf(src, from_page=i, to_page=i)
-        return out.tobytes()
+        with fitz.open(stream=blob, filetype="pdf") as source, fitz.open() as output:
+            keep = [i for i in range(source.page_count) if not (start <= i <= end)]
+            for i in keep:
+                output.insert_pdf(source, from_page=i, to_page=i)
+            return output.tobytes()
 
     raise RuntimeError("No PDF provider available.")
 
@@ -129,6 +127,8 @@ def ingest_uploaded(engine: Any, uploaded_files: Optional[List[Any]]) -> bool:
             }
         )
         state.set_doc_bytes(doc_id, data)
+        existing.add(doc_id)
+        doc_by_id[doc_id] = docs[-1]
 
         order = state.get_order()
         order.append(doc_id)
@@ -198,6 +198,7 @@ def remove_doc(doc_id: str) -> bool:
     b = dict(st.session_state[state.SS_DOC_BYTES])
     b.pop(doc_id, None)
     st.session_state[state.SS_DOC_BYTES] = b
+    state.invalidate_doc_derived(doc_id)
 
     docs = [d for d in docs if d["doc_id"] != doc_id]
     state.set_docs(docs)

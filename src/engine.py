@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from io import BytesIO
 from pathlib import Path
+import stat
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from runplan import RunPlan
@@ -34,6 +35,40 @@ class Event:
     timestamp: str
     level: str
     message: str
+
+
+@dataclass(frozen=True)
+class BatchLimits:
+    max_file_bytes: int = 50 * 1024 * 1024
+    max_total_bytes: int = 250 * 1024 * 1024
+    max_files: int = 100
+    max_pages: int = 2_000
+
+
+@dataclass(frozen=True)
+class BatchFileResult:
+    filename: str
+    status: str
+    message: str
+    size_bytes: int
+    page_count: int
+
+
+@dataclass(frozen=True)
+class BatchExtractionResult:
+    data: bytes
+    report: bytes
+    files: List[BatchFileResult]
+    bytes_read: int
+    pages_processed: int
+
+    @property
+    def success_count(self) -> int:
+        return sum(item.status == "OK" for item in self.files)
+
+    @property
+    def failure_count(self) -> int:
+        return sum(item.status != "OK" for item in self.files)
 
 
 class Engine:
@@ -86,20 +121,20 @@ class Engine:
         if provider == "fitz":
             import fitz  # type: ignore
 
-            doc = fitz.open(stream=data, filetype="pdf")
             page_infos: List[PageInfo] = []
-            for i in range(len(doc)):
-                page = doc[i]
-                rect = page.rect
-                page_infos.append(
-                    PageInfo(
-                        file_id=file_id,
-                        page_index=i,
-                        width=float(rect.width),
-                        height=float(rect.height),
+            with fitz.open(stream=data, filetype="pdf") as document:
+                for i in range(len(document)):
+                    page = document[i]
+                    rect = page.rect
+                    page_infos.append(
+                        PageInfo(
+                            file_id=file_id,
+                            page_index=i,
+                            width=float(rect.width),
+                            height=float(rect.height),
+                        )
                     )
-                )
-            return len(doc), page_infos
+                return len(document), page_infos
 
         if provider == "pypdf":
             from pypdf import PdfReader  # type: ignore
@@ -127,7 +162,6 @@ class Engine:
 
     def build_manifest(self, ingested_files: List[IngestedFile]) -> Dict[str, Any]:
         manifest = {
-            "timestamp": utc_now_iso(),
             "run_plan": {
                 "pdf": {
                     "provider": self.run_plan.pdf.provider,
@@ -160,7 +194,6 @@ class Engine:
                 }
                 for f in ingested_files
             ],
-            "event_count": len(self._events),
         }
         return manifest
 
@@ -188,6 +221,8 @@ class Engine:
 
         res = extract.detect_tables(file_id=file_id, data=data, run_plan=self.run_plan)
         self._log("INFO", f"detect_tables status={res.status} candidates={len(res.candidates)}")
+        for message in res.errors:
+            self._log("WARN", message)
         return res
 
     def candidate_to_grid(self, cand: extract.TableCandidate) -> List[List[str]]:
@@ -276,102 +311,75 @@ class Engine:
         return export_mod.build_results_csv_bytes(table)
 
     def export_interactive(
-            self,
-            *,
-            file_id: str,
-            candidates: Sequence[extract.TableCandidate],
-            selected_candidate_indices: Sequence[int],
-            slice_configs: Dict[int, Dict[str, Any]],
-            docs_meta: Sequence[Dict[str, Any]],
-            export_format: str,
-            include_xlsx: bool,
-        ) -> bytes:
-            if not candidates:
-                self._log("WARN", "No candidates available for export.")
-                if export_format == "csv":
-                    return b""
-                manifest = self.build_manifest(self.ingested_from_docs_meta(docs_meta))
-                return export_mod.build_export_zip(
-                    table_headers=[],
-                    table_rows=[],
-                    manifest=manifest,
-                    events=self.get_events(),
-                    include_xlsx=False,
+        self,
+        *,
+        file_id: str,
+        candidates: Sequence[extract.TableCandidate],
+        selected_candidate_indices: Sequence[int],
+        slice_configs: Dict[int, Dict[str, Any]],
+        docs_meta: Sequence[Dict[str, Any]],
+        export_format: str,
+        include_xlsx: bool,
+    ) -> bytes:
+        event_start = len(self._events)
+        indices = sorted(
+            {
+                int(index)
+                for index in selected_candidate_indices
+                if 0 <= int(index) < len(candidates)
+            }
+        )
+        if not indices:
+            self._log("WARN", "No valid candidate indices selected.")
+
+        out_headers: Optional[List[str]] = None
+        out_rows: List[Tuple[str, int, str, int, Sequence[str]]] = []
+        for index in indices:
+            candidate = candidates[index]
+            config = slice_configs.get(index, {})
+            try:
+                headers, sliced = self.slice_grid(
+                    self.candidate_to_grid(candidate),
+                    mode=str(config.get("mode", "table")),
+                    row_1b=(None if config.get("row") in (None, "") else int(config["row"])),
+                    col_1b=(
+                        None
+                        if config.get("column") in (None, "")
+                        else int(config["column"])
+                    ),
+                )
+            except Exception as exc:
+                self._log("WARN", f"Slice failed for candidate idx={index}: {exc}")
+                continue
+            if out_headers is not None and list(headers) != out_headers:
+                self._log("WARN", f"Schema mismatch for candidate idx={index}; skipping.")
+                continue
+            out_headers = list(headers)
+            for row_index, values in enumerate(sliced):
+                out_rows.append(
+                    (
+                        candidate.file_id,
+                        int(candidate.page_index),
+                        candidate.candidate_id,
+                        row_index,
+                        list(values),
+                    )
                 )
 
-            indices = [int(i) for i in selected_candidate_indices]
-            indices = [i for i in indices if 0 <= i < len(candidates)]
-            if not indices:
-                self._log("WARN", "No valid candidate indices selected.")
-                if export_format == "csv":
-                    return b""
-                manifest = self.build_manifest(self.ingested_from_docs_meta(docs_meta))
-                return export_mod.build_export_zip(
-                    table_headers=[],
-                    table_rows=[],
-                    manifest=manifest,
-                    events=self.get_events(),
-                    include_xlsx=False,
-                )
+        if out_headers is None:
+            out_headers = []
+        if export_format == "csv":
+            return self._build_csv_bytes(table_headers=out_headers, table_rows=out_rows)
+        if export_format != "zip":
+            raise ValueError("export format must be 'csv' or 'zip'")
+        return export_mod.build_export_zip(
+            table_headers=out_headers,
+            table_rows=out_rows,
+            manifest=self.build_manifest(self.ingested_from_docs_meta(docs_meta)),
+            events=self.get_events()[event_start:],
+            include_xlsx=bool(include_xlsx),
+        )
 
-            out_headers: Optional[List[str]] = None
-            out_rows: List[Tuple[str, int, str, int, Sequence[str]]] = []
-
-            for idx in indices:
-                cand = candidates[idx]
-                grid = self.candidate_to_grid(cand)
-
-                cfg = slice_configs.get(idx, {})
-                mode = str(cfg.get("mode", "table"))
-                row_1b = cfg.get("row")
-                col_1b = cfg.get("column")
-
-                try:
-                    headers, sliced = self.slice_grid(
-                        grid,
-                        mode=mode,
-                        row_1b=(None if row_1b in (None, "") else int(row_1b)),
-                        col_1b=(None if col_1b in (None, "") else int(col_1b)),
-                    )
-                except Exception as e:
-                    self._log("WARN", f"Slice failed for candidate idx={idx}: {e}")
-                    continue
-
-                if out_headers is None:
-                    out_headers = list(headers)
-                else:
-                    if list(headers) != list(out_headers):
-                        self._log("WARN", f"Schema mismatch for candidate idx={idx}; skipping.")
-                        continue
-
-                for r_i, row_vals in enumerate(sliced):
-                    out_rows.append(
-                        (
-                            cand.file_id,
-                            int(cand.page_index),
-                            str(cand.candidate_id),
-                            int(r_i),
-                            list(row_vals),
-                        )
-                    )
-
-            if out_headers is None:
-                self._log("WARN", "No rows produced after slicing.")
-                out_headers = []
-
-            manifest = self.build_manifest(self.ingested_from_docs_meta(docs_meta))
-
-            if export_format == "csv":
-                return self._build_csv_bytes(table_headers=out_headers, table_rows=out_rows)
-
-            return export_mod.build_export_zip(
-                table_headers=out_headers,
-                table_rows=out_rows,
-                manifest=manifest,
-                events=self.get_events(),
-                include_xlsx=bool(include_xlsx),
-            )
-    
     def batch_extract_directory(
         self,
         *,
@@ -383,111 +391,207 @@ class Engine:
         col_1b: Optional[int],
         export_format: str,
         include_xlsx: bool,
+        limits: Optional[BatchLimits] = None,
     ) -> bytes:
-        p = Path(directory_path)
-        if not p.exists() or not p.is_dir():
-            raise ValueError("Invalid directory path")
+        return self.batch_extract_directory_result(
+            directory_path=directory_path,
+            page_1b=page_1b,
+            table_index_1b=table_index_1b,
+            slice_mode=slice_mode,
+            row_1b=row_1b,
+            col_1b=col_1b,
+            export_format=export_format,
+            include_xlsx=include_xlsx,
+            limits=limits,
+        ).data
 
-        files = sorted([x for x in p.iterdir() if x.is_file() and x.suffix.lower() == ".pdf"], key=lambda x: x.name)
-        if not files:
-            raise ValueError("No PDF files found in directory")
-
+    def batch_extract_directory_result(
+        self,
+        *,
+        directory_path: str,
+        page_1b: int,
+        table_index_1b: int,
+        slice_mode: str,
+        row_1b: Optional[int],
+        col_1b: Optional[int],
+        export_format: str,
+        include_xlsx: bool,
+        limits: Optional[BatchLimits] = None,
+    ) -> BatchExtractionResult:
+        limits = limits or BatchLimits()
+        event_start = len(self._events)
         page_index = int(page_1b) - 1
         if page_index < 0:
             raise ValueError("page must be >= 1")
-
-        t_index = int(table_index_1b) - 1
-        if t_index < 0:
+        table_index = int(table_index_1b) - 1
+        if table_index < 0:
             raise ValueError("table index must be >= 1")
+        if export_format not in {"csv", "zip"}:
+            raise ValueError("export format must be 'csv' or 'zip'")
+
+        root = Path(directory_path).expanduser()
+        try:
+            root_stat = root.lstat()
+            root_resolved = root.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"Batch directory is inaccessible: {exc}") from exc
+        if root.is_symlink() or self._is_reparse_point(root_stat):
+            raise ValueError("Batch directory must not be a symlink or reparse point")
+        if not stat.S_ISDIR(root_stat.st_mode):
+            raise ValueError("Batch path is not a directory")
+
+        try:
+            paths = sorted(
+                [path for path in root.iterdir() if path.suffix.lower() == ".pdf"],
+                key=lambda path: (path.name.casefold(), path.name),
+            )
+        except OSError as exc:
+            raise ValueError(f"Batch directory cannot be listed: {exc}") from exc
+        if not paths:
+            raise ValueError("No PDF files found in directory")
+        if len(paths) > limits.max_files:
+            raise ValueError(
+                f"Batch has {len(paths)} PDF entries; limit is {limits.max_files}"
+            )
+
+        files: List[Tuple[Path, int]] = []
+        file_results: List[BatchFileResult] = []
+        for path in paths:
+            try:
+                file_stat = path.lstat()
+                resolved = path.resolve(strict=True)
+                if path.is_symlink() or self._is_reparse_point(file_stat):
+                    raise ValueError("symlink or reparse point is not allowed")
+                if not stat.S_ISREG(file_stat.st_mode):
+                    raise ValueError("entry is not a regular file")
+                if resolved.parent != root_resolved:
+                    raise ValueError("entry resolves outside the batch directory")
+                size = int(file_stat.st_size)
+                if size > limits.max_file_bytes:
+                    raise ValueError(
+                        f"file is {size} bytes; per-file limit is {limits.max_file_bytes}"
+                    )
+                files.append((path, size))
+            except (OSError, ValueError) as exc:
+                file_results.append(BatchFileResult(path.name, "FAILED", str(exc), 0, 0))
+
+        total_size = sum(size for _, size in files)
+        if total_size > limits.max_total_bytes:
+            raise ValueError(
+                f"Batch is {total_size} bytes; total limit is {limits.max_total_bytes}"
+            )
 
         out_headers: Optional[List[str]] = None
         out_rows: List[Tuple[str, int, str, int, Sequence[str]]] = []
-
         schema_prefix = ["seq", "source_filename"]
+        bytes_read = 0
+        pages_processed = 0
+        ingested_files: List[IngestedFile] = []
 
-        for seq, fp in enumerate(files, start=1):
+        for sequence, (path, expected_size) in enumerate(files, start=1):
             try:
-                data = fp.read_bytes()
-            except Exception as e:
-                self._log("WARN", f"Failed to read file seq={seq} name={fp.name}: {e}")
-                continue
+                with path.open("rb") as source:
+                    data = source.read(limits.max_file_bytes + 1)
+                if len(data) != expected_size:
+                    raise ValueError("file changed while it was being read")
+                if len(data) > limits.max_file_bytes:
+                    raise ValueError("file exceeded the per-file limit while being read")
+                bytes_read += len(data)
+                ingested, _ = self.ingest(path.name, data)
+                if pages_processed + ingested.page_count > limits.max_pages:
+                    raise ValueError(
+                        f"processing this file would exceed the {limits.max_pages}-page batch limit"
+                    )
+                pages_processed += ingested.page_count
+                if page_index >= ingested.page_count:
+                    raise ValueError(f"page {page_1b} is outside this document")
 
-            ing, _ = self.ingest(fp.name, data)
-            det = self.detect_tables(ing.file_id, data)
-            if not det.candidates:
-                self._log("WARN", f"No candidates for seq={seq} name={fp.name}")
-                continue
-
-            page_cands = [c for c in det.candidates if int(c.page_index) == page_index]
-            if not page_cands:
-                self._log("WARN", f"No tables on page={page_1b} for seq={seq} name={fp.name}")
-                continue
-
-            page_cands = sorted(page_cands, key=lambda c: (-c.score, c.bbox[1], c.bbox[0]))
-
-            if t_index >= len(page_cands):
-                self._log(
-                    "WARN",
-                    f"Table index {table_index_1b} out of range on page={page_1b} for seq={seq} name={fp.name}",
+                detection = self.detect_tables(ingested.file_id, data)
+                if detection.status == "FAILED":
+                    raise ValueError("table detection failed: " + "; ".join(detection.errors))
+                page_candidates = [
+                    candidate
+                    for candidate in detection.candidates
+                    if int(candidate.page_index) == page_index
+                ]
+                page_candidates.sort(
+                    key=lambda candidate: (
+                        float(candidate.bbox[1]),
+                        float(candidate.bbox[0]),
+                        -float(candidate.score),
+                        candidate.candidate_id,
+                    )
                 )
-                continue
+                if not page_candidates:
+                    raise ValueError(f"no table found on page {page_1b}")
+                if table_index >= len(page_candidates):
+                    raise ValueError(
+                        f"table {table_index_1b} is outside the page's detected table range"
+                    )
 
-            cand = page_cands[t_index]
-            grid = self.candidate_to_grid(cand)
-
-            try:
+                candidate = page_candidates[table_index]
                 headers, sliced = self.slice_grid(
-                    grid,
+                    self.candidate_to_grid(candidate),
                     mode=str(slice_mode),
                     row_1b=(None if row_1b in (None, "") else int(row_1b)),
                     col_1b=(None if col_1b in (None, "") else int(col_1b)),
                 )
-            except Exception as e:
-                self._log("WARN", f"Slice failed seq={seq} name={fp.name}: {e}")
-                continue
-
-            full_headers = schema_prefix + list(headers)
-            if out_headers is None:
+                full_headers = schema_prefix + list(headers)
+                if out_headers is not None and full_headers != out_headers:
+                    raise ValueError("sliced table schema does not match earlier files")
                 out_headers = full_headers
-            else:
-                if full_headers != out_headers:
-                    self._log("WARN", f"Schema mismatch seq={seq} name={fp.name}; skipping file.")
-                    continue
-
-            for r_i, row_vals in enumerate(sliced):
-                values = [str(seq), fp.name] + [("" if v is None else str(v)) for v in list(row_vals)]
-                out_rows.append(
-                    (
-                        ing.file_id,
-                        int(cand.page_index),
-                        str(cand.candidate_id),
-                        int(r_i),
-                        values,
+                for row_index, values in enumerate(sliced):
+                    out_rows.append(
+                        (
+                            ingested.file_id,
+                            candidate.page_index,
+                            candidate.candidate_id,
+                            row_index,
+                            [str(sequence), path.name]
+                            + [("" if value is None else str(value)) for value in values],
+                        )
                     )
+                ingested_files.append(ingested)
+                file_results.append(
+                    BatchFileResult(path.name, "OK", "exported", len(data), ingested.page_count)
+                )
+            except Exception as exc:
+                self._log("WARN", f"Batch file {path.name} failed: {exc}")
+                file_results.append(
+                    BatchFileResult(path.name, "FAILED", str(exc), expected_size, 0)
                 )
 
         if out_headers is None:
             out_headers = schema_prefix
-
-        manifest = self.build_manifest(
-            [
-                IngestedFile(
-                    file_id="batch",
-                    filename=str(p),
-                    size_bytes=0,
-                    sha256="",
-                    page_count=0,
-                )
-            ]
-        )
+        file_results.sort(key=lambda item: (item.filename.casefold(), item.filename))
+        report_object = {
+            "limits": asdict(limits),
+            "bytes_read": bytes_read,
+            "pages_processed": pages_processed,
+            "files": [asdict(item) for item in file_results],
+        }
+        report = canonical_json_bytes(report_object)
+        manifest = self.build_manifest(ingested_files)
 
         if export_format == "csv":
-            return self._build_csv_bytes(table_headers=out_headers, table_rows=out_rows)
-
-        return export_mod.build_export_zip(
-            table_headers=out_headers,
-            table_rows=out_rows,
-            manifest=manifest,
-            events=self.get_events(),
-            include_xlsx=bool(include_xlsx),
+            data = self._build_csv_bytes(table_headers=out_headers, table_rows=out_rows)
+        else:
+            data = export_mod.build_export_zip(
+                table_headers=out_headers,
+                table_rows=out_rows,
+                manifest=manifest,
+                events=self.get_events()[event_start:],
+                include_xlsx=bool(include_xlsx),
+                extra_members={"batch_report.json": report},
+            )
+        return BatchExtractionResult(
+            data=data,
+            report=report,
+            files=file_results,
+            bytes_read=bytes_read,
+            pages_processed=pages_processed,
         )
+
+    @staticmethod
+    def _is_reparse_point(file_stat: Any) -> bool:
+        return bool(getattr(file_stat, "st_file_attributes", 0) & 0x400)

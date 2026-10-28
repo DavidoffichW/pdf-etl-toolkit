@@ -57,10 +57,10 @@ def detect_capabilities() -> Dict[str, Capability]:
 
     export_providers: List[str] = ["csv"]
     export_missing: List[str] = []
-    if _try_import("pandas"):
-        export_providers.append("pandas")
+    if _try_import("openpyxl"):
+        export_providers.append("openpyxl")
     else:
-        export_missing.append("pandas")
+        export_missing.append("openpyxl")
 
     caps: Dict[str, Capability] = {
         "pdf": Capability(
@@ -89,7 +89,7 @@ def detect_capabilities() -> Dict[str, Capability]:
             available=True,
             providers=export_providers,
             missing_modules=export_missing,
-            notes="CSV is always available; pandas enables XLSX",
+            notes="CSV is always available; openpyxl enables XLSX",
         ),
     }
     return caps

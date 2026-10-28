@@ -60,7 +60,7 @@ def _iframe_pdf(*, pdf_bytes: bytes, page_1b: int, height_px: int, key_suffix: s
     st.markdown(html, unsafe_allow_html=True)
 
 
-@st.cache_data(show_spinner=False, max_entries=2048)
+@st.cache_data(show_spinner=False, max_entries=128)
 def _render_page_image(
     pdf_sha16: str,
     page_index: int,
@@ -70,18 +70,18 @@ def _render_page_image(
 ) -> Tuple[str, bytes]:
     import fitz
 
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page = doc.load_page(page_index)
-    mat = fitz.Matrix(float(sharp), float(sharp))
-    pix = page.get_pixmap(matrix=mat, alpha=False)
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+        page = document.load_page(page_index)
+        mat = fitz.Matrix(float(sharp), float(sharp))
+        pix = page.get_pixmap(matrix=mat, alpha=False)
 
-    if fmt.lower() in ("jpg", "jpeg"):
-        try:
-            return "image/jpeg", pix.tobytes("jpeg")
-        except Exception:
-            return "image/png", pix.tobytes("png")
+        if fmt.lower() in ("jpg", "jpeg"):
+            try:
+                return "image/jpeg", pix.tobytes("jpeg")
+            except Exception:
+                return "image/png", pix.tobytes("png")
 
-    return "image/png", pix.tobytes("png")
+        return "image/png", pix.tobytes("png")
 
 
 def _single_page_image_viewer(
