@@ -17,17 +17,30 @@ The application is designed for trusted, single-user local operation. It has no 
 
 Detection is best-effort. Provider errors are reported separately from a valid "no table found" result. OCR libraries may be detected by the capability display, but scanned-image OCR is not implemented.
 
-## Requirements and installation
+## Install and run
 
 The v0.1.0 candidate targets Python 3.10 through 3.13 on Windows and Linux.
 
+From the repository root on Windows PowerShell:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.address 127.0.0.1
+```
+
+On Linux or macOS:
+
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
+python3 -m venv .venv
+. .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m streamlit run app.py --server.address 127.0.0.1
 ```
+
+Open the local URL printed by Streamlit, normally
+<http://127.0.0.1:8501>. Keep that terminal open while using the application
+and press Ctrl+C to stop it.
 
 The checked-in Streamlit configuration also binds the app to `127.0.0.1`. Do not expose this application to untrusted network clients: batch mode accepts a server-side directory path and is intended only for trusted local use.
 
@@ -85,7 +98,8 @@ The word-grid fallback groups positioned words into rows and column anchors. It 
 
 ## Development
 
-Install the development requirements and run the tests:
+From the repository root with the virtual environment active, install the
+development requirements and run the tests:
 
 ```bash
 python -m pip install -r requirements-dev.txt
